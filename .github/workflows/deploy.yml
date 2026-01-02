@@ -1,0 +1,58 @@
+name: Deploy via SSH (Jump Host) + Docker Compose
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # private key from secrets
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          # ssh config with ProxyJump
+          cat > ~/.ssh/config <<'EOF'
+          Host bastion
+            HostName ${{ secrets.BASTION_HOST }}
+            User ${{ secrets.BASTION_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+
+          Host target
+            HostName ${{ secrets.TARGET_HOST }}
+            User ${{ secrets.TARGET_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            ProxyJump bastion
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Upload project to server
+        shell: bash
+        run: |
+          rsync -az --delete \
+            -e "ssh -F ~/.ssh/config" \
+            ./ target:/opt/demo-docker-deploy/
+
+      - name: Deploy (docker compose up)
+        shell: bash
+        run: |
+          ssh -F ~/.ssh/config target <<'CMD'
+            set -e
+            cd /opt/demo-docker-deploy
+            docker compose down || true
+            docker compose build --no-cache
+            docker compose up -d
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          CMD
