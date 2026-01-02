@@ -2,7 +2,7 @@ name: Deploy via SSH (Jump Host) + Docker Compose
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   deploy:
@@ -15,44 +15,61 @@ jobs:
       - name: Prepare SSH
         shell: bash
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          set -euo pipefail
 
-          # private key from secrets
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
 
-          # ssh config with ProxyJump
-          cat > ~/.ssh/config <<'EOF'
+          # Private key from GitHub Secrets
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+          # SSH config with ProxyJump
+          cat > "$HOME/.ssh/config" <<EOF
           Host bastion
             HostName ${{ secrets.BASTION_HOST }}
             User ${{ secrets.BASTION_USER }}
-            IdentityFile ~/.ssh/id_ed25519
+            IdentityFile $HOME/.ssh/id_ed25519
             StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
 
           Host target
             HostName ${{ secrets.TARGET_HOST }}
             User ${{ secrets.TARGET_USER }}
-            IdentityFile ~/.ssh/id_ed25519
+            IdentityFile $HOME/.ssh/id_ed25519
             ProxyJump bastion
             StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
           EOF
 
-      - name: Upload project to server
+          chmod 600 "$HOME/.ssh/config"
+
+          # quick sanity check
+          ls -la "$HOME/.ssh"
+          sed -n '1,120p' "$HOME/.ssh/config"
+
+      - name: Upload project to target (rsync)
         shell: bash
         run: |
+          set -euo pipefail
+
           rsync -az --delete \
-            -e "ssh -F ~/.ssh/config" \
+            -e "ssh -F $HOME/.ssh/config" \
             ./ target:/opt/demo-docker-deploy/
 
-      - name: Deploy (docker compose up)
+      - name: Deploy on target (docker compose up)
         shell: bash
         run: |
-          ssh -F ~/.ssh/config target <<'CMD'
-            set -e
+          set -euo pipefail
+
+          ssh -F "$HOME/.ssh/config" target <<'CMD'
+            set -euo pipefail
             cd /opt/demo-docker-deploy
+
             docker compose down || true
             docker compose build --no-cache
             docker compose up -d
+
+            echo
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
           CMD
